@@ -1,14 +1,46 @@
 <script lang="ts">
   import highsLoader from "highs";
+  import BatteryChart from '$lib/BatteryChart.svelte';
 
   let apiKey: string = $state("");
   let status: string = $state("idle");
   let totalRevenue: number = $state(0);
 
-  type DayResults = {"day": string, "timestamps": string[], "batteryKWh": number[], "spotIncVAT": number[]};
+  let selectedBatterySize = $state(12);
+  let selectedBatteryPower = $state(6);
+
+  let resultReflectsSettings = $state(false);
+
+  type DayResults = {
+    "day": string;
+    "timestamps": string[]; 
+    "batteryKWh": number[]; 
+    "spotIncVAT": number[];
+    "spec": {
+      "problem": string;
+      "batteryKW": number;
+      "batteryKWh": number;
+    };
+  };
   let results: DayResults[] = $state([]);
   let selectDays: string[] = $state([]);
   let selectedDay: string = $state("");
+
+
+  let selectedResult : DayResults | null = $state(null);
+  $effect(() => {
+    const matches = results.filter(r => r.day == selectedDay);
+    if(matches.length == 0) {
+      selectedResult = null;
+      resultReflectsSettings = false;
+    } else {
+      selectedResult = matches[0];
+      resultReflectsSettings = (
+        selectedResult.spec.batteryKWh == selectedBatterySize
+        && selectedResult.spec.batteryKW == selectedBatteryPower
+      )
+    }
+  });
   
   async function runBatteryAnalysis() {
     totalRevenue = 0;
@@ -25,8 +57,8 @@
     // For the data we have, what would be the impact of a battery?
     const days = Math.round(energyData.length / 24)
     const fuseSize = 20;
-    const maxKW = 6;
-    const batteryKWh = 12;
+    const batteryKW = selectedBatteryPower;
+    const batteryKWh = selectedBatterySize;
 
     let currentChargeKWh = 0;
 
@@ -43,7 +75,7 @@
           objectives.push(`${price} h${h}_energy`)
 
           // In each hour we can charge +/- the inverter kW, notwithstanding state-of-charge
-          bounds.push(`-${maxKW} <= h${h}_energy <= ${maxKW}`);
+          bounds.push(`-${batteryKW} <= h${h}_energy <= ${batteryKW}`);
           
           if(h === 0) {
             // First hour must be exactly the initial state-of-charge
@@ -55,7 +87,7 @@
             constraints.push(`soc_h${h - 1} + h${h}_energy - soc_h${h} = 0`);
           }
         }
-        const PROBLEM = `Minimize
+        const problem = `Minimize
           obj:
             ${objectives.join(" + ")}
           Subject To
@@ -63,20 +95,19 @@
           Bounds
             ${bounds.join("\n            ")}
           End`;
-        const sol = highs.solve(PROBLEM);
+        const sol = highs.solve(problem);
         
         status = `day ${day} ${-1 * sol.ObjectiveValue}SEK`;
         totalRevenue += -1 * sol.ObjectiveValue;
-        console.log(highs);
-        console.log(PROBLEM);
-        console.log(sol);
-        console.log(Object.values(sol['Columns']).map(r => [r['Name'], r['Primal']]))
         
         const result: DayResults = {
           day: energyData[horizonStart]['from'].split("T")[0],
           timestamps: [],
           spotIncVAT: [],
           batteryKWh: [],
+          spec: {
+            batteryKW, batteryKWh, problem
+          }
         }
         for(let h=0;h<24;h++) {
           result.timestamps.push(energyData[horizonStart + h]['from']);
@@ -88,10 +119,10 @@
         selectedDay = result.day;
 
         currentChargeKWh = (sol.Columns[`soc_h23`] as any)['Primal'];
+        // make the UI move between optimised days because it's fun and shows computation progress
         await sleep(1);
     }
   }
-
 
   function sleep(ms: number) {
       return new Promise(resolve => setTimeout(resolve, ms));
@@ -156,90 +187,18 @@
     return out;
   }
 
-  import * as echarts from 'echarts';
-
-  let spotPriceChartEl: HTMLElement;
-  let batteryKWhEl: HTMLElement;
-  $effect(() => {
-    const matches = results.filter(r => r.day == selectedDay);
-    if(matches.length == 0) {
-      return;
-    }
-    let res = matches[0];
-    const tooltip = {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross'
-      }
-    };
-
-    const timestamps = res.timestamps.map(isodate => {
-      const hour = isodate.split("T")[1].split(":")[0];
-      return hour
-    });
-
-    echarts.init(spotPriceChartEl).setOption({
-      title: { text: 'Spot Price', },
-      tooltip,
-      xAxis: {
-        type: 'category',
-        boundaryGap: false,
-        data: timestamps
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: {
-          formatter: '{value}kr'
-        },
-        axisPointer: {
-          snap: true
-        }
-      },
-      series: [
-        {
-          name: 'Spot Price',
-          type: 'line',
-          step: 'start',
-          // prettier-ignore
-          data: res.spotIncVAT,
-        }
-      ]
-    });
-
-    echarts.init(batteryKWhEl).setOption({
-      title: { text: 'Battery State-of-Charge', },
-      tooltip,
-      xAxis: {
-        type: 'category',
-        boundaryGap: false,
-        data: timestamps
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: {
-          formatter: '{value} kWh'
-        },
-        axisPointer: {
-          snap: true
-        }
-      },
-      series: [
-        {
-          name: 'Battery State-of-charge',
-          type: 'line',
-          smooth: true,
-          // prettier-ignore
-          data: res.batteryKWh,
-        }
-      ]
-    });
-  });
-
 </script>
 
 <p>Load your data by logging in using your Tibber customer credentials and getting a token <a href="https://developer.tibber.com/settings/access-token">here</a></p>
 <p>Once you've done this once the data is cached in local storage</p>
 <input type="text" placeholder="Paste your Tibber API token" bind:value={apiKey} />
+<p>
+<label>Battery Size<input type="number" placeholder="12" bind:value={selectedBatterySize} /> kWh</label>
+</p>
+<p>
+<label>Battery Power<input type="number" placeholder="6" bind:value={selectedBatteryPower} /> kW</label>
+</p>
+
 <button onclick={runBatteryAnalysis}>Run battery analysis</button>
 <pre>{status}</pre>
 <pre>Revenue: {totalRevenue}SEK</pre>
@@ -250,5 +209,14 @@
   {/each}
 </select>
 
-<div style="width: 600px;height:400px;" bind:this={spotPriceChartEl}></div>
-<div style="width: 600px;height:400px;" bind:this={batteryKWhEl}></div>
+{#if !resultReflectsSettings}
+<p>Results don't match settings, click 'Run battery analysis' to re-run</p>
+{/if}
+
+<BatteryChart result={selectedResult} />
+
+{#if selectedResult}
+<pre>
+  {selectedResult.spec.problem}
+</pre>
+{/if}
