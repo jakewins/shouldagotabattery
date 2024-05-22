@@ -237,6 +237,8 @@
 
 </script>
 
+<p>Load your data by logging in using your Tibber customer credentials and getting a token <a href="https://developer.tibber.com/settings/access-token">here</a></p>
+<p>Once you've done this once the data is cached in local storage</p>
 <input type="text" placeholder="Paste your Tibber API token" bind:value={apiKey} />
 <button onclick={runBatteryAnalysis}>Run battery analysis</button>
 <pre>{status}</pre>
