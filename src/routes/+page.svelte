@@ -9,13 +9,16 @@
   let selectedBatterySize = $state(12);
   let selectedBatteryPower = $state(6);
 
+  let selectedPVKW = $state(10);
+
   let resultReflectsSettings = $state(false);
 
   type DayResults = {
     "day": string;
     "timestamps": string[]; 
     "batteryKWh": number[]; 
-    "spotIncVAT": number[];
+    "spotIncVAT": number[]; 
+    "pvOutputKW": number[];
     "spec": {
       "problem": string;
       "batteryKW": number;
@@ -50,8 +53,10 @@
     const highs = await highsLoader({
       locateFile: (file) => "https://lovasoa.github.io/highs-js/" + file
     });
-    status = "loading data..";
+    status = "loading your historic meter data from Tibber..";
     const energyData = await loadEnergyData(apiKey);
+    status = "modelling PV system output on historic weather data..";
+    const pvForecast = await loadPVForecast();
     status = "crunching numbers..";
 
     // For the data we have, what would be the impact of a battery?
@@ -71,11 +76,14 @@
         let bounds = [];
 
         for(let h=0;h<hours;h++) {
-          const price = energyData[horizonStart + h]['unitPriceVAT'];
-          objectives.push(`${price} h${h}_energy`)
+          const pvOutputKW = pvForecast.outputs.ac[horizonStart + h] / 1000 * selectedPVKW;
+          const spotPrice = energyData[horizonStart + h]['unitPriceVAT'];
+          const gridFee = 0.20 + 0.0561 * spotPrice;
+          const energyTax = 0.535;
+          objectives.push(`${spotPrice + gridFee + energyTax} h${h}_bat_kw`)
 
           // In each hour we can charge +/- the inverter kW, notwithstanding state-of-charge
-          bounds.push(`-${batteryKW} <= h${h}_energy <= ${batteryKW}`);
+          bounds.push(`-${batteryKW} <= h${h}_bat_kw <= ${batteryKW}`);
           
           if(h === 0) {
             // First hour must be exactly the initial state-of-charge
@@ -84,10 +92,10 @@
             // Subsequent hours state-of-charge is bound by the battery capacity
             bounds.push(`0 <= soc_h${h} <= ${batteryKWh}`);
             // The current hours state-of-charge is equal to the prior hours soc + energy charged
-            constraints.push(`soc_h${h - 1} + h${h}_energy - soc_h${h} = 0`);
+            constraints.push(`soc_h${h - 1} - h${h}_bat_kw - soc_h${h} = 0`);
           }
         }
-        const problem = `Minimize
+        const problem = `Maximize
           obj:
             ${objectives.join(" + ")}
           Subject To
@@ -97,13 +105,14 @@
           End`;
         const sol = highs.solve(problem);
         
-        status = `day ${day} ${-1 * sol.ObjectiveValue}SEK`;
-        totalRevenue += -1 * sol.ObjectiveValue;
+        status = `day ${day} ${sol.ObjectiveValue}SEK`;
+        totalRevenue += sol.ObjectiveValue;
         
         const result: DayResults = {
           day: energyData[horizonStart]['from'].split("T")[0],
           timestamps: [],
           spotIncVAT: [],
+          pvOutputKW: [],
           batteryKWh: [],
           spec: {
             batteryKW, batteryKWh, problem
@@ -112,7 +121,8 @@
         for(let h=0;h<24;h++) {
           result.timestamps.push(energyData[horizonStart + h]['from']);
           result.spotIncVAT.push(energyData[horizonStart + h]['unitPriceVAT']);
-          result.batteryKWh.push((sol.Columns[`soc_h${h}`] as any)['Primal'])
+          result.pvOutputKW.push(pvForecast.outputs.ac[horizonStart + h] / 1000 * selectedPVKW);
+          result.batteryKWh.push((sol.Columns[`soc_h${h}`] as any)['Primal']);
         }
         results.push(result);
         selectDays.push(result.day);
@@ -187,6 +197,35 @@
     return out;
   }
 
+  type PVForecast = {
+    outputs: {
+      // Hourly AC system output, watts
+      ac: number[]
+    },
+    station_info: any,
+    errors: any[],
+    warnings: any[],
+  }
+
+  async function loadPVForecast() : Promise<PVForecast> {
+    let cached = localStorage.getItem("pv_forecast");
+    if(cached) {
+      // Obviously needs to be smarter if params change
+      return JSON.parse(cached);
+    }
+
+    let res = await fetch('/api/pvwatts', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+    let raw = await res.json();
+    localStorage.setItem("pv_forecast", JSON.stringify(raw));
+    return raw;
+  }
+
 </script>
 
 <p>Load your data by logging in using your Tibber customer credentials and getting a token <a href="https://developer.tibber.com/settings/access-token">here</a></p>
@@ -197,6 +236,9 @@
 </p>
 <p>
 <label>Battery Power<input type="number" placeholder="6" bind:value={selectedBatteryPower} /> kW</label>
+</p>
+<p>
+<label>PV System Size (nominal)<input type="number" placeholder="20" bind:value={selectedPVKW} /> kW</label>
 </p>
 
 <button onclick={runBatteryAnalysis}>Run battery analysis</button>
