@@ -30,6 +30,6 @@
 		"@sveltejs/adapter-static": "^3.0.1",
 		"@urql/svelte": "^4.2.0",
 		"echarts": "^5.5.0",
-		"highs": "^1.0.1"
+		"highs": "^1.8.0"
 	}
 }

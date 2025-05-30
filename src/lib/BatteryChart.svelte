@@ -1,14 +1,8 @@
 <script lang="ts">
     import * as echarts from 'echarts';
-  
-    type DayResults = {
-        "day": string, 
-        "timestamps": string[], 
-        "batteryKWh": number[], 
-        "spotIncVAT": number[],
-        "pvOutputKW": number[]
-    };
-    let {result} : {result: DayResults | null} = $props();
+    import * as analysis from '$lib/analysis';
+
+    let {result} : {result: analysis.DayResults | null} = $props();
     
     let spotPriceChartEl: HTMLElement;
     let batteryKWhEl: HTMLElement;
@@ -24,10 +18,7 @@
         }
       };
   
-      const timestamps = result.timestamps.map(isodate => {
-        const hour = isodate.split("T")[1].split(":")[0];
-        return hour
-      });
+      const timestamps = result.timestamps.map(ts => ts.toISOString().split("T")[1].split(":")[0]);
   
       echarts.init(spotPriceChartEl).setOption({
         title: { text: 'Spot Price', },
@@ -52,7 +43,7 @@
             type: 'line',
             step: 'start',
             // prettier-ignore
-            data: result.spotIncVAT,
+            data: result.importPrice,
           }
         ]
       });

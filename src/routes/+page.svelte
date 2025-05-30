@@ -1,6 +1,7 @@
 <script lang="ts">
   import highsLoader from "highs";
   import BatteryChart from '$lib/BatteryChart.svelte';
+  import * as analysis from '$lib/analysis';
 
   let apiKey: string = $state("");
   let status: string = $state("idle");
@@ -13,26 +14,13 @@
 
   let resultReflectsSettings = $state(false);
 
-  type DayResults = {
-    "day": string;
-    "timestamps": string[]; 
-    "batteryKWh": number[]; 
-    "spotIncVAT": number[]; 
-    "pvOutputKW": number[];
-    "spec": {
-      "problem": string;
-      "batteryKW": number;
-      "batteryKWh": number;
-    };
-  };
-  let results: DayResults[] = $state([]);
+  let results: analysis.DayResults[] = $state([]);
   let selectDays: string[] = $state([]);
   let selectedDay: string = $state("");
 
-
-  let selectedResult : DayResults | null = $state(null);
+  let selectedResult : analysis.DayResults | null = $state(null);
   $effect(() => {
-    const matches = results.filter(r => r.day == selectedDay);
+    const matches = results.filter(r => r.day.dayName == selectedDay);
     if(matches.length == 0) {
       selectedResult = null;
       resultReflectsSettings = false;
@@ -59,91 +47,39 @@
     const pvForecast = await loadPVForecast();
     status = "crunching numbers..";
 
-    // For the data we have, what would be the impact of a battery?
-    const days = Math.round(energyData.length / 24)
-    const fuseSize = 20;
-    const batteryKW = selectedBatteryPower;
-    const batteryKWh = selectedBatterySize;
+    const inputData = analysis.preprocess(pvForecast, energyData);
+    const dayInputs = analysis.toDayChunks(inputData);
+    let currentStateOfCharge = 0;
+    for(let dayInput of dayInputs) {
+      const spec = {
+        batteryKW: selectedBatteryPower,
+        batteryKWh: selectedBatterySize,
+        batteryKWhAtSoD: 0,
+        pvKW: currentStateOfCharge,
+      };
+      const dayOutput = analysis.analyzeOne(highs, spec, dayInput);
+      currentStateOfCharge = dayOutput.batteryKWhAtEoD;
 
-    let currentChargeKWh = 0;
-
-    for(let day=0;day<days;day+=1) {
-        const horizonStart = day * 24;
-        const hours = Math.min(48, energyData.length - horizonStart);
-
-        let objectives = [];
-        let constraints = [];
-        let bounds = [];
-
-        for(let h=0;h<hours;h++) {
-          const pvOutputKW = pvForecast.outputs.ac[horizonStart + h] / 1000 * selectedPVKW;
-          const spotPrice = energyData[horizonStart + h]['unitPriceVAT'];
-          const gridFee = 0.20 + 0.0561 * spotPrice;
-          const energyTax = 0.535;
-          objectives.push(`${spotPrice + gridFee + energyTax} h${h}_bat_kw`)
-
-          // In each hour we can charge +/- the inverter kW, notwithstanding state-of-charge
-          bounds.push(`-${batteryKW} <= h${h}_bat_kw <= ${batteryKW}`);
-          
-          if(h === 0) {
-            // First hour must be exactly the initial state-of-charge
-            constraints.push(`soc_h${h} = ${currentChargeKWh}`);
-          } else {
-            // Subsequent hours state-of-charge is bound by the battery capacity
-            bounds.push(`0 <= soc_h${h} <= ${batteryKWh}`);
-            // The current hours state-of-charge is equal to the prior hours soc + energy charged
-            constraints.push(`soc_h${h - 1} - h${h}_bat_kw - soc_h${h} = 0`);
-          }
-        }
-        const problem = `Maximize
-          obj:
-            ${objectives.join(" + ")}
-          Subject To
-            ${constraints.join("\n            ")}
-          Bounds
-            ${bounds.join("\n            ")}
-          End`;
-        const sol = highs.solve(problem);
-        
-        status = `day ${day} ${sol.ObjectiveValue}SEK`;
-        totalRevenue += sol.ObjectiveValue;
-        
-        const result: DayResults = {
-          day: energyData[horizonStart]['from'].split("T")[0],
-          timestamps: [],
-          spotIncVAT: [],
-          pvOutputKW: [],
-          batteryKWh: [],
-          spec: {
-            batteryKW, batteryKWh, problem
-          }
-        }
-        for(let h=0;h<24;h++) {
-          result.timestamps.push(energyData[horizonStart + h]['from']);
-          result.spotIncVAT.push(energyData[horizonStart + h]['unitPriceVAT']);
-          result.pvOutputKW.push(pvForecast.outputs.ac[horizonStart + h] / 1000 * selectedPVKW);
-          result.batteryKWh.push((sol.Columns[`soc_h${h}`] as any)['Primal']);
-        }
-        results.push(result);
-        selectDays.push(result.day);
-        selectedDay = result.day;
-
-        currentChargeKWh = (sol.Columns[`soc_h23`] as any)['Primal'];
-        // make the UI move between optimised days because it's fun and shows computation progress
-        await sleep(1);
+      // Record this in the UI state
+      results.push(dayOutput);
+      console.log(dayOutput.day.dayName)
+      selectDays.push(dayOutput.day.dayName);
+      selectedDay = dayOutput.day.dayName;
+      await sleep(1);
     }
+    status = "Done!";
   }
 
   function sleep(ms: number) {
       return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  async function loadEnergyData(token: string) {
+  async function loadEnergyData(token: string) : Promise<analysis.TibberDataset> {
     let cached = localStorage.getItem("energy_data");
     if(cached && token === "") {
       return JSON.parse(cached);
     }
-    let cursorTs = btoa('2023-01-01T00:00:00Z');
+    let cursorTs = btoa('2024-01-01T00:00:00Z');
     let out = [];
     while(true) {
       let res = await fetch('https://api.tibber.com/v1-beta/gql', {
@@ -169,7 +105,9 @@
                       from
                       consumption
                       cost
+                      unitPrice
                       unitPriceVAT
+                      currency
                     }
                   }
                 }
@@ -197,21 +135,14 @@
     return out;
   }
 
-  type PVForecast = {
-    outputs: {
-      // Hourly AC system output, watts
-      ac: number[]
-    },
-    station_info: any,
-    errors: any[],
-    warnings: any[],
-  }
-
-  async function loadPVForecast() : Promise<PVForecast> {
-    let cached = localStorage.getItem("pv_forecast");
-    if(cached) {
+  async function loadPVForecast() : Promise<analysis.PVWattsDataset> {
+    let cachedRaw = localStorage.getItem("pv_forecast");
+    if(cachedRaw) {
       // Obviously needs to be smarter if params change
-      return JSON.parse(cached);
+      const cached = JSON.parse(cachedRaw);
+      if(cached) {
+        return cached;
+      }
     }
 
     let res = await fetch('/api/pvwatts', {
@@ -247,7 +178,7 @@
 
 <select bind:value={selectedDay}>
   {#each results as result} 
-  <option value={result.day}>{result.day}</option>
+  <option value={result.day.dayName}>{result.day.dayName}</option>
   {/each}
 </select>
 
