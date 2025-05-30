@@ -16,6 +16,7 @@ export type DayResults = {
   importPrice: number[];
   exportPrice: number[];
   pvOutputKW: number[];
+  uncontrolledLoad: number[];
   // Where does the battery end up at the end of the 24-hour period?
   batteryKWhAtEoD: number,
   spec: {
@@ -78,6 +79,7 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
     exportPrice: [],
     pvOutputKW: [],
     batteryKWh: [],
+    uncontrolledLoad: [],
     batteryKWhAtEoD: (sol.Columns[`soc_h23`] as any)['Primal'],
     spec: {
       batteryKW:spec.batteryKW, batteryKWh: spec.batteryKWh, problem
@@ -87,6 +89,10 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
     result.timestamps.push(day.records[h].hourStart);
     result.importPrice.push(day.records[h].importPrice);
     result.exportPrice.push(day.records[h].exportPrice);
+    result.uncontrolledLoad.push(day.records[h].consumptionKWh);
+    if(day.records[h].hourStart.getUTCFullYear() == 2025 && day.records[h].hourStart.getUTCMonth() == 2 && day.records[h].hourStart.getUTCDate() == 27) {
+      console.log("WHAT", day.records[h].hourStart, day.records[h].pvProductionKWNormalized, spec.pvKW, day.records[h].pvProductionKWNormalized * spec.pvKW)
+    }
     result.pvOutputKW.push(day.records[h].pvProductionKWNormalized * spec.pvKW);
     result.batteryKWh.push((sol.Columns[`soc_h${h}`] as any)['Primal']);
   }
@@ -101,12 +107,15 @@ export function preprocess(pvwatts: PVWattsDataset, tibberdata: TibberDataset) :
     let yearStartUTC = new Date(Date.UTC(hourStart.getUTCFullYear()));
     let millisSinceStartOfUTCYear = hourStart.getTime() - yearStartUTC.getTime();
     let hoursIntoUtcYear = Math.floor(millisSinceStartOfUTCYear / 1000 / 60 / 60);
+    if(hourStart.getUTCFullYear() == 2025 && hourStart.getUTCMonth() == 2 && hourStart.getUTCDate() == 27) {
+      console.log(hourStart, hoursIntoUtcYear, pvwatts.outputs.ac[hoursIntoUtcYear] / 1000.0)
+    }
     out.push({
-      hourStart: hourStart,
+      hourStart,
       consumptionKWh: tr.consumption,
       importPrice: tr.unitPrice + tr.unitPriceVAT,
       exportPrice: tr.unitPrice + tr.unitPriceVAT,
-      pvProductionKWNormalized: pvwatts.outputs.ac[hoursIntoUtcYear],
+      pvProductionKWNormalized: pvwatts.outputs.ac[hoursIntoUtcYear] / 1000.0,
     })
   }
 

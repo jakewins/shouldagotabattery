@@ -54,19 +54,21 @@
       const spec = {
         batteryKW: selectedBatteryPower,
         batteryKWh: selectedBatterySize,
-        batteryKWhAtSoD: 0,
-        pvKW: currentStateOfCharge,
+        batteryKWhAtSoD: currentStateOfCharge,
+        pvKW: selectedPVKW,
       };
       const dayOutput = analysis.analyzeOne(highs, spec, dayInput);
       currentStateOfCharge = dayOutput.batteryKWhAtEoD;
 
       // Record this in the UI state
       results.push(dayOutput);
-      console.log(dayOutput.day.dayName)
       selectDays.push(dayOutput.day.dayName);
       selectedDay = dayOutput.day.dayName;
       await sleep(1);
     }
+
+    selectedDay = "2025-02-27"
+
     status = "Done!";
   }
 
