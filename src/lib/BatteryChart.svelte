@@ -77,7 +77,7 @@
       });
 
       echarts.init(pvOutputEl).setOption({
-        title: { text: 'PV Output & Uncontrolled load', },
+        title: { text: 'Misc loads', },
         tooltip,
         xAxis: {
           type: 'category',
@@ -106,6 +106,18 @@
             smooth: true,
             // prettier-ignore
             data: result.uncontrolledLoad,
+          },{
+            name: 'Import',
+            type: 'line',
+            smooth: true,
+            // prettier-ignore
+            data: result.importKW,
+          },{
+            name: 'Export',
+            type: 'line',
+            smooth: true,
+            // prettier-ignore
+            data: result.exportKW,
           }
         ]
       });

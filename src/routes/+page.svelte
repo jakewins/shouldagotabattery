@@ -1,6 +1,7 @@
 <script lang="ts">
   import highsLoader from "highs";
   import BatteryChart from '$lib/BatteryChart.svelte';
+  import SolutionDetails from '$lib/SolutionDetails.svelte';
   import * as analysis from '$lib/analysis';
 
   let apiKey: string = $state("");
@@ -48,8 +49,11 @@
     status = "crunching numbers..";
 
     const inputData = analysis.preprocess(pvForecast, energyData);
-    const dayInputs = analysis.toDayChunks(inputData);
+    const dayInputs = [analysis.toDayChunks(inputData)[100]];
     let currentStateOfCharge = 0;
+
+
+
     for(let dayInput of dayInputs) {
       const spec = {
         batteryKW: selectedBatteryPower,
@@ -66,8 +70,6 @@
       selectedDay = dayOutput.day.dayName;
       await sleep(1);
     }
-
-    selectedDay = "2025-02-27"
 
     status = "Done!";
   }
@@ -189,6 +191,8 @@
 {/if}
 
 <BatteryChart result={selectedResult} />
+
+<SolutionDetails result={selectedResult} />
 
 {#if selectedResult}
 <pre>

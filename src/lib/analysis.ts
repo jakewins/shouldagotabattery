@@ -1,4 +1,4 @@
-import type { Highs } from "highs";
+import type { Highs, HighsSolution } from "highs";
 
 export type InputRecord = {
   hourStart: Date
@@ -15,6 +15,8 @@ export type DayResults = {
   batteryKWh: number[];
   importPrice: number[];
   exportPrice: number[];
+  importKW: number[];
+  exportKW: number[];
   pvOutputKW: number[];
   uncontrolledLoad: number[];
   // Where does the battery end up at the end of the 24-hour period?
@@ -23,7 +25,8 @@ export type DayResults = {
     problem: string;
     batteryKW: number;
     batteryKWh: number;
-  }
+  },
+  solution: HighsSolution
 };
 
 export type SystemSpec = {
@@ -44,13 +47,26 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
   let bounds = [];
 
   for(let h=0;h<hours;h++) {
-    const spotPrice = day.records[h].importPrice;
-    const gridFee = 0.20 + 0.0561 * spotPrice;
-    const energyTax = 0.535;
-    objectives.push(`${spotPrice + gridFee + energyTax} h${h}_bat_kw`)
+    // const gridFee = 0.20 + 0.0561 * spotPrice;
+    // const energyTax = 0.535;
+    // Throughout, positives indicate output / production, negatives indicate consumption
+    objectives.push(`${day.records[h].importPrice} import_h${h}`)
+    objectives.push(`-${day.records[h].exportPrice} export_h${h}`)
 
     // In each hour we can charge +/- the inverter kW, notwithstanding state-of-charge
-    bounds.push(`-${spec.batteryKW} <= h${h}_bat_kw <= ${spec.batteryKW}`);
+    bounds.push(`-${spec.batteryKW} <= bat_kw_h${h} <= ${spec.batteryKW}`);
+
+    // Balance-of-energy constraint - everything must add up to zero
+    constraints.push(`import_h${h} - export_h${h} + bat_kw_h${h} + unc_ld_h${h} + pv_h${h} = 0`);
+
+    // Import & Export; same variable split in two because cost is different
+    bounds.push(`0 <= import_h${h} <= +infinity`);
+    bounds.push(`0 <= export_h${h} <= +infinity`);
+
+    // Uncontrolled load
+    bounds.push(`-${day.records[h].consumptionKWh} <= unc_ld_h${h} <= -${day.records[h].consumptionKWh}`);
+    // PV output - allowing curtailment down to zero
+    bounds.push(`0 <= pv_h${h} <= ${day.records[h].pvProductionKWNormalized * spec.pvKW}`);
 
     if(h === 0) {
       // First hour must be exactly the initial state-of-charge
@@ -59,44 +75,55 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
       // Subsequent hours state-of-charge is bound by the battery capacity
       bounds.push(`0 <= soc_h${h} <= ${spec.batteryKWh}`);
       // The current hours state-of-charge is equal to the prior hours soc + energy charged
-      constraints.push(`soc_h${h - 1} - h${h}_bat_kw - soc_h${h} = 0`);
+      constraints.push(`soc_h${h - 1} - bat_kw_h${h} - soc_h${h} = 0`);
     }
   }
-  const problem = `Maximize
-        obj:
-          ${objectives.join(" + ")}
+  const problem = `Minimize
+        obj: ${objectives.join(" + ")}
         Subject To
           ${constraints.join("\n            ")}
         Bounds
           ${bounds.join("\n            ")}
         End`;
-  const sol = highs.solve(problem);
+  try {
+    const sol = highs.solve(problem);
 
-  const result: DayResults = {
-    day,
-    timestamps: [],
-    importPrice: [],
-    exportPrice: [],
-    pvOutputKW: [],
-    batteryKWh: [],
-    uncontrolledLoad: [],
-    batteryKWhAtEoD: (sol.Columns[`soc_h23`] as any)['Primal'],
-    spec: {
-      batteryKW:spec.batteryKW, batteryKWh: spec.batteryKWh, problem
+    console.log(sol)
+
+    const result: DayResults = {
+      day,
+      timestamps: [],
+      importPrice: [],
+      exportPrice: [],
+      importKW: [],
+      exportKW: [],
+      pvOutputKW: [],
+      batteryKWh: [],
+      uncontrolledLoad: [],
+      batteryKWhAtEoD: (sol.Columns[`soc_h23`] as any)['Primal'],
+      spec: {
+        batteryKW:spec.batteryKW, batteryKWh: spec.batteryKWh, problem
+      },
+      solution: sol
     }
-  }
-  for(let h=0;h<24;h++) {
-    result.timestamps.push(day.records[h].hourStart);
-    result.importPrice.push(day.records[h].importPrice);
-    result.exportPrice.push(day.records[h].exportPrice);
-    result.uncontrolledLoad.push(day.records[h].consumptionKWh);
-    if(day.records[h].hourStart.getUTCFullYear() == 2025 && day.records[h].hourStart.getUTCMonth() == 2 && day.records[h].hourStart.getUTCDate() == 27) {
-      console.log("WHAT", day.records[h].hourStart, day.records[h].pvProductionKWNormalized, spec.pvKW, day.records[h].pvProductionKWNormalized * spec.pvKW)
+    for(let h=0;h<24;h++) {
+      result.timestamps.push(day.records[h].hourStart);
+      result.importPrice.push(day.records[h].importPrice);
+      result.exportPrice.push(day.records[h].exportPrice);
+      result.importKW.push((sol.Columns[`import_h${h}`] as any)['Primal']);
+      result.exportKW.push((sol.Columns[`export_h${h}`] as any)['Primal']);
+      result.exportPrice.push(day.records[h].exportPrice);
+      result.uncontrolledLoad.push(day.records[h].consumptionKWh);
+      result.pvOutputKW.push(day.records[h].pvProductionKWNormalized * spec.pvKW);
+      result.batteryKWh.push((sol.Columns[`soc_h${h}`] as any)['Primal']);
     }
-    result.pvOutputKW.push(day.records[h].pvProductionKWNormalized * spec.pvKW);
-    result.batteryKWh.push((sol.Columns[`soc_h${h}`] as any)['Primal']);
+    return result;
+  } catch(e) {
+    console.log("Failed to solve", problem)
+    console.log("failed input day", day, spec);
+    throw e;
   }
-  return result;
+
 }
 
 export function preprocess(pvwatts: PVWattsDataset, tibberdata: TibberDataset) : InputRecord[] {
@@ -107,8 +134,9 @@ export function preprocess(pvwatts: PVWattsDataset, tibberdata: TibberDataset) :
     let yearStartUTC = new Date(Date.UTC(hourStart.getUTCFullYear()));
     let millisSinceStartOfUTCYear = hourStart.getTime() - yearStartUTC.getTime();
     let hoursIntoUtcYear = Math.floor(millisSinceStartOfUTCYear / 1000 / 60 / 60);
-    if(hourStart.getUTCFullYear() == 2025 && hourStart.getUTCMonth() == 2 && hourStart.getUTCDate() == 27) {
-      console.log(hourStart, hoursIntoUtcYear, pvwatts.outputs.ac[hoursIntoUtcYear] / 1000.0)
+    while(isNaN(pvwatts.outputs.ac[hoursIntoUtcYear])) {
+      // We miss one day if it's a leap year, so use prior day
+      hoursIntoUtcYear -= 24;
     }
     out.push({
       hourStart,
