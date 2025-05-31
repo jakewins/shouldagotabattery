@@ -49,10 +49,8 @@
     status = "crunching numbers..";
 
     const inputData = analysis.preprocess(pvForecast, energyData);
-    const dayInputs = [analysis.toDayChunks(inputData)[100]];
+    const dayInputs = analysis.toDayChunks(inputData);
     let currentStateOfCharge = 0;
-
-
 
     for(let dayInput of dayInputs) {
       const spec = {
@@ -60,6 +58,8 @@
         batteryKWh: selectedBatterySize,
         batteryKWhAtSoD: currentStateOfCharge,
         pvKW: selectedPVKW,
+        maxExportKW: 20 * 240 * 3 / 1000,
+        maxImportKW: 20 * 240 * 3 / 1000,
       };
       const dayOutput = analysis.analyzeOne(highs, spec, dayInput);
       currentStateOfCharge = dayOutput.batteryKWhAtEoD;

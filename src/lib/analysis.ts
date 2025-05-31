@@ -35,6 +35,8 @@ export type SystemSpec = {
   // What is the battery state at the beginning of this day?
   batteryKWhAtSoD: number
   pvKW: number
+  maxExportKW: number
+  maxImportKW: number
 }
 
 export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayResults {
@@ -47,26 +49,25 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
   let bounds = [];
 
   for(let h=0;h<hours;h++) {
-    // const gridFee = 0.20 + 0.0561 * spotPrice;
-    // const energyTax = 0.535;
     // Throughout, positives indicate output / production, negatives indicate consumption
     objectives.push(`${day.records[h].importPrice} import_h${h}`)
     objectives.push(`-${day.records[h].exportPrice} export_h${h}`)
-
-    // In each hour we can charge +/- the inverter kW, notwithstanding state-of-charge
-    bounds.push(`-${spec.batteryKW} <= bat_kw_h${h} <= ${spec.batteryKW}`);
 
     // Balance-of-energy constraint - everything must add up to zero
     constraints.push(`import_h${h} - export_h${h} + bat_kw_h${h} + unc_ld_h${h} + pv_h${h} = 0`);
 
     // Import & Export; same variable split in two because cost is different
-    bounds.push(`0 <= import_h${h} <= +infinity`);
-    bounds.push(`0 <= export_h${h} <= +infinity`);
+    bounds.push(`0 <= import_h${h} <= ${spec.maxImportKW}`);
+    bounds.push(`0 <= export_h${h} <= ${spec.maxExportKW}`);
 
     // Uncontrolled load
     bounds.push(`-${day.records[h].consumptionKWh} <= unc_ld_h${h} <= -${day.records[h].consumptionKWh}`);
     // PV output - allowing curtailment down to zero
     bounds.push(`0 <= pv_h${h} <= ${day.records[h].pvProductionKWNormalized * spec.pvKW}`);
+
+    // Battery
+    // In each hour we can charge +/- the inverter kW, notwithstanding state-of-charge
+    bounds.push(`-${spec.batteryKW} <= bat_kw_h${h} <= ${spec.batteryKW}`);
 
     if(h === 0) {
       // First hour must be exactly the initial state-of-charge
@@ -138,11 +139,15 @@ export function preprocess(pvwatts: PVWattsDataset, tibberdata: TibberDataset) :
       // We miss one day if it's a leap year, so use prior day
       hoursIntoUtcYear -= 24;
     }
+    const spotPrice = Math.round(tr.unitPrice + tr.unitPriceVAT * 1000) / 1000;
+    const gridImportFee = 0.20 + 0.05 * spotPrice;
+    const gridExportFee = 0.068 + 0.0561 * spotPrice;
+    const energyTax = 0.549;
     out.push({
       hourStart,
       consumptionKWh: tr.consumption,
-      importPrice: tr.unitPrice + tr.unitPriceVAT,
-      exportPrice: tr.unitPrice + tr.unitPriceVAT,
+      importPrice: spotPrice + energyTax + gridImportFee,
+      exportPrice: spotPrice + 0.6 - gridExportFee,
       pvProductionKWNormalized: pvwatts.outputs.ac[hoursIntoUtcYear] / 1000.0,
     })
   }

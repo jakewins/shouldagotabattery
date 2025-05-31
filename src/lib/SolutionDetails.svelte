@@ -23,6 +23,31 @@
   });
 </script>
 
+<style>
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: sans-serif;
+        font-size: 14px;
+        margin: 1em 0;
+    }
+
+    th, td {
+        padding: 8px 12px;
+        border: 1px solid #ccc;
+        text-align: right; /* Good for numbers */
+    }
+
+    th {
+        background-color: #f5f5f5;
+        text-align: center;
+    }
+
+    tr:nth-child(even) {
+        background-color: #f9f9f9;
+    }
+</style>
+
 {#if result}
 <table>
     <tbody>

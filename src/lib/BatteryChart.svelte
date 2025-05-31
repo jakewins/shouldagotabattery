@@ -21,7 +21,7 @@
       const timestamps = result.timestamps.map(ts => ts.toISOString().split("T")[1].split(":")[0]);
   
       echarts.init(spotPriceChartEl).setOption({
-        title: { text: 'Spot Price', },
+        title: { text: 'Price', },
         tooltip,
         xAxis: {
           type: 'category',
@@ -39,11 +39,18 @@
         },
         series: [
           {
-            name: 'Spot Price',
+            name: 'Import',
             type: 'line',
             step: 'start',
             // prettier-ignore
             data: result.importPrice,
+          },
+          {
+            name: 'Export',
+            type: 'line',
+            step: 'start',
+            // prettier-ignore
+            data: result.exportPrice,
           }
         ]
       });
