@@ -17,10 +17,21 @@ export type DayResults = {
   exportPrice: number[];
   importKW: number[];
   exportKW: number[];
+  // Actual PV production, incl, curtailment
   pvOutputKW: number[];
+  // How much PV if we didn't have to curtail
+  pvOutputKWNoCurtail: number[];
   uncontrolledLoad: number[];
   // Where does the battery end up at the end of the 24-hour period?
   batteryKWhAtEoD: number,
+  // How much PV did we have to curtail b/c of breaker limits?
+  curtailedPVKWh: number,
+  // What's the cost of this day? Negative indicates revenue
+  cost: {
+    total: number,
+    // If you didn't have the battery or solar, what would you pay?
+    onlyUncontrolledLoad: number,
+  },
   spec: {
     problem: string;
     batteryKW: number;
@@ -51,7 +62,7 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
   for(let h=0;h<hours;h++) {
     // Throughout, positives indicate output / production, negatives indicate consumption
     objectives.push(`${day.records[h].importPrice} import_h${h}`)
-    objectives.push(`-${day.records[h].exportPrice} export_h${h}`)
+    objectives.push(`${-day.records[h].exportPrice} export_h${h}`)
 
     // Balance-of-energy constraint - everything must add up to zero
     constraints.push(`import_h${h} - export_h${h} + bat_kw_h${h} + unc_ld_h${h} + pv_h${h} = 0`);
@@ -89,8 +100,6 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
   try {
     const sol = highs.solve(problem);
 
-    console.log(sol)
-
     const result: DayResults = {
       day,
       timestamps: [],
@@ -99,11 +108,19 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
       importKW: [],
       exportKW: [],
       pvOutputKW: [],
+      pvOutputKWNoCurtail: [],
       batteryKWh: [],
       uncontrolledLoad: [],
       batteryKWhAtEoD: (sol.Columns[`soc_h23`] as any)['Primal'],
+      curtailedPVKWh: 0,
       spec: {
-        batteryKW:spec.batteryKW, batteryKWh: spec.batteryKWh, problem
+        batteryKW:spec.batteryKW,
+        batteryKWh: spec.batteryKWh,
+        problem
+      },
+      cost: {
+        total: 0,
+        onlyUncontrolledLoad: 0
       },
       solution: sol
     }
@@ -111,12 +128,20 @@ export function analyzeOne(highs: Highs, spec: SystemSpec, day: DayChunk) : DayR
       result.timestamps.push(day.records[h].hourStart);
       result.importPrice.push(day.records[h].importPrice);
       result.exportPrice.push(day.records[h].exportPrice);
-      result.importKW.push((sol.Columns[`import_h${h}`] as any)['Primal']);
-      result.exportKW.push((sol.Columns[`export_h${h}`] as any)['Primal']);
-      result.exportPrice.push(day.records[h].exportPrice);
       result.uncontrolledLoad.push(day.records[h].consumptionKWh);
-      result.pvOutputKW.push(day.records[h].pvProductionKWNormalized * spec.pvKW);
       result.batteryKWh.push((sol.Columns[`soc_h${h}`] as any)['Primal']);
+      let importKW = (sol.Columns[`import_h${h}`] as any)['Primal'];
+      let exportKW = (sol.Columns[`export_h${h}`] as any)['Primal'];
+      let pvKW = (sol.Columns[`pv_h${h}`] as any)['Primal'];
+      let pvKWNoCurtail = day.records[h].pvProductionKWNormalized * spec.pvKW;
+      result.importKW.push(importKW);
+      result.exportKW.push(exportKW);
+      result.pvOutputKW.push(pvKW);
+      result.pvOutputKWNoCurtail.push(pvKWNoCurtail);
+
+      result.curtailedPVKWh += pvKWNoCurtail - pvKW;
+      result.cost.total += importKW * day.records[h].importPrice - exportKW * day.records[h].exportPrice;
+      result.cost.onlyUncontrolledLoad += day.records[h].consumptionKWh * day.records[h].importPrice;
     }
     return result;
   } catch(e) {
@@ -141,13 +166,13 @@ export function preprocess(pvwatts: PVWattsDataset, tibberdata: TibberDataset) :
     }
     const spotPrice = Math.round(tr.unitPrice + tr.unitPriceVAT * 1000) / 1000;
     const gridImportFee = 0.20 + 0.05 * spotPrice;
-    const gridExportFee = 0.068 + 0.0561 * spotPrice;
+    const gridExportPayment = 0.068 + 0.0561 * spotPrice;
     const energyTax = 0.549;
     out.push({
       hourStart,
       consumptionKWh: tr.consumption,
       importPrice: spotPrice + energyTax + gridImportFee,
-      exportPrice: spotPrice + 0.6 - gridExportFee,
+      exportPrice: spotPrice + gridExportPayment,
       pvProductionKWNormalized: pvwatts.outputs.ac[hoursIntoUtcYear] / 1000.0,
     })
   }

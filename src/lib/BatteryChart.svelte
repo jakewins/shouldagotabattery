@@ -107,6 +107,13 @@
             smooth: true,
             // prettier-ignore
             data: result.pvOutputKW,
+          },
+          {
+            name: 'PV Output (Uncurtailed)',
+            type: 'line',
+            smooth: true,
+            // prettier-ignore
+            data: result.pvOutputKWNoCurtail,
           },{
             name: 'Uncontrolled load',
             type: 'line',

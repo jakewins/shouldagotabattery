@@ -7,20 +7,16 @@
   let hours: string[] = $state([]);
   let cols: string[] = $state([]);
 
-  $effect(() => {
-    if(result === null) {
-      return;
-    }
+  if(result !== null) {
     const numHours = Object.keys(result.solution.Columns).filter(c => c.startsWith("import_h")).length
     hours = [];
     for(let h=0;h<numHours;h++) {
-        hours.push(`h${h}`)
+      hours.push(`h${h}`)
     }
 
     // infer columns
     cols = Object.keys(result.solution.Columns).filter(c => c.includes("_h0")).map(c => c.replace('_h0', ''));
-
-  });
+  }
 </script>
 
 <style>

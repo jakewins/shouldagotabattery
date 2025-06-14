@@ -6,10 +6,13 @@
 
   let apiKey: string = $state("");
   let status: string = $state("idle");
-  let totalRevenue: number = $state(0);
+  let totalCost: number = $state(0);
+  let totalCostUncontrollableLoad: number = $state(0);
+  let totalCurtailedPV: number = $state(0);
 
   let selectedBatterySize = $state(12);
   let selectedBatteryPower = $state(6);
+  let selectedFuseSizeKW = $state(20 * 240 * 3 / 1000); // 3p 240V 20A
 
   let selectedPVKW = $state(10);
 
@@ -35,7 +38,9 @@
   });
   
   async function runBatteryAnalysis() {
-    totalRevenue = 0;
+    totalCost = 0;
+    totalCostUncontrollableLoad = 0;
+    totalCurtailedPV = 0;
     results = [];
     selectDays = [];
     status = "loading lp solver";
@@ -58,8 +63,8 @@
         batteryKWh: selectedBatterySize,
         batteryKWhAtSoD: currentStateOfCharge,
         pvKW: selectedPVKW,
-        maxExportKW: 20 * 240 * 3 / 1000,
-        maxImportKW: 20 * 240 * 3 / 1000,
+        maxExportKW: selectedFuseSizeKW,
+        maxImportKW: selectedFuseSizeKW,
       };
       const dayOutput = analysis.analyzeOne(highs, spec, dayInput);
       currentStateOfCharge = dayOutput.batteryKWhAtEoD;
@@ -68,6 +73,9 @@
       results.push(dayOutput);
       selectDays.push(dayOutput.day.dayName);
       selectedDay = dayOutput.day.dayName;
+      totalCost += dayOutput.cost.total;
+      totalCostUncontrollableLoad += dayOutput.cost.onlyUncontrolledLoad;
+      totalCurtailedPV += dayOutput.curtailedPVKWh;
       await sleep(1);
     }
 
@@ -176,10 +184,16 @@
 <label>PV System Size (nominal)<input type="number" placeholder="20" bind:value={selectedPVKW} /> kW</label>
 </p>
 
+<p>
+  <label>Fuse Size (kW)<input type="number" placeholder="12.5" bind:value={selectedFuseSizeKW} /> kW</label>
+</p>
+
 <button onclick={runBatteryAnalysis}>Run battery analysis</button>
 <pre>{status}</pre>
-<pre>Revenue: {totalRevenue}SEK</pre>
-
+<pre>Cost: {totalCost}SEK ({Math.round(totalCost/results.length*1000)/1000}SEK/day)</pre>
+<pre>w/o battery & PV: {totalCostUncontrollableLoad}SEK ({Math.round(totalCostUncontrollableLoad/results.length*1000)/1000}SEK/day)</pre>
+<pre>{results.length} days</pre>
+<pre>{totalCurtailedPV} kWh curtailed PV</pre>
 <select bind:value={selectedDay}>
   {#each results as result} 
   <option value={result.day.dayName}>{result.day.dayName}</option>
